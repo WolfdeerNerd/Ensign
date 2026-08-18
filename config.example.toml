@@ -1,0 +1,52 @@
+# Ensign configuration.
+# Paths may use "~" (the invoking user's home, sudo-safe) and $VARS.
+# Anything set under [hosts.<hostname>] overrides the values above it
+# on that machine only — so this one file can be synced everywhere.
+
+# Where the database and error log live.
+# data_dir = "~/.local/share/ensign"
+
+# Worker threads. 0 = auto (sized from clamd's MaxThreads and CPU count).
+max_workers = 0
+rescan_after_days = 90
+
+# Warn if the virus-signature database is older than this many days
+# (usually means freshclam has silently stopped running). 0 disables.
+signature_max_age_days = 3
+clamd_socket = "/var/run/clamav/clamd.ctl"
+
+scan_targets = [
+    "~/Downloads",
+    "~/Documents",
+    "~/Pictures",
+    "~",
+]
+
+# Directory trees whose contents never change in place (e.g. proton
+# prefix snapshots). Unchanged subtrees under these are skipped by mtime.
+snapshot_roots = []
+
+# Trees to skip entirely. High-churn temp/cache directories mostly
+# produce "file vanished mid-scan" errors and no security value.
+# If you use snapper (or another btrfs snapshot tool) on a subvolume
+# under your home directory, its .snapshots dir holds full copies of
+# your whole home tree per snapshot -- left un-excluded, Ensign will
+# walk every file once per snapshot, and the count balloons with each
+# new snapshot snapper takes.
+excludes = [
+    "~/.cache",
+    "~/.local/share/Trash",
+    "~/.snapshots",
+]
+
+# --- Per-machine overrides (section name = `hostname` output) ---------
+#
+# [hosts.gaming-rig]
+# max_workers = 8          # explicit override beats auto
+# scan_targets = ["~/Downloads", "~/.local/share/Steam", "~"]
+# snapshot_roots = [
+#     "~/.local/share/Steam/steamapps/compatdata/<app_id>/pfx/dosdevices/z:/snapshots",
+# ]
+#
+# [hosts.old-laptop]
+# max_workers = 2

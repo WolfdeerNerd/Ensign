@@ -1,0 +1,4 @@
+# Ensign dependencies.
+# Requires Python 3.11+ (uses the stdlib tomllib for config parsing).
+sqlalchemy>=2.0
+rich>=13.0

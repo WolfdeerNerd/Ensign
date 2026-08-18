@@ -1,0 +1,21 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+*.pyo
+
+# SQLite database + WAL-mode side files (db.py sets journal_mode=WAL)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local config (users generate their own from config.example.toml)
+config.toml
+
+# Logs
+*.log
+error_logs.txt
+
+# Editor/OS cruft
+.DS_Store
+*.swp

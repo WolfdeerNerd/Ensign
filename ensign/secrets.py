@@ -1,0 +1,193 @@
+"""Path patterns suggesting a secrets/credentials store.
+
+Design: three confidence tiers, not one flat list.
+
+  HIGH   -- exact, canonical, tool-defined names (directories, fixed
+            filenames, distinctive extensions). These essentially never
+            collide with unrelated content by accident.
+  MEDIUM -- naming conventions/prefixes that need directory context to
+            be trustworthy (e.g. Ethereum's UTC-- keystore prefix only
+            means something inside a keystore/ folder; id_* only means
+            something inside .ssh/).
+  (anything else is NOT flagged -- bare English words like "wallet",
+  "secrets", "keystore" are deliberately excluded; they were the
+  source of most false positives under the old substring-matching
+  approach and add negligible real coverage.)
+
+Used two ways, at two different confidence thresholds:
+  - reports.py (suggest_fixes): gates whether to print a ready-to-run
+    setfacl command. A missed real secret here is the costly mistake
+    (Ensign would suggest granting clamd group read access to actual
+    credentials), so this call site checks at the WIDER threshold
+    (HIGH or MEDIUM) -- when in doubt, don't suggest the command.
+  - scanner.py (process_file): reclassifies a permission-denied result
+    as CLASSIFIED (expected) instead of ERROR (chased). A false match
+    here just hides a real permission problem behind "expected, not a
+    bug," so this call site checks at the NARROWER threshold (HIGH
+    only) -- when in doubt, leave it as a real error to look at.
+
+Deliberately conservative either way: this is a deny-list, not a
+guarantee. It will miss a secrets store whose name doesn't match
+anything here (a custom password manager with an obscure directory
+name, for instance). That's an accepted, known gap -- see:
+
+docs/Classified_Paths_Research.md
+
+for how each entry was sourced.
+"""
+from __future__ import annotations
+
+import os
+from enum import Enum
+
+# ----------------------------------------------------------------------
+# HIGH confidence: exact, canonical, tool-defined names.
+# ----------------------------------------------------------------------
+
+# Directory names, matched as a whole path component (not substring).
+# Some are multi-segment (checked as a path substring since they're
+# specific enough not to need per-component matching).
+_HIGH_DIRS = (
+    ".ssh", ".gnupg", ".aws", ".azure", ".docker", ".kube",
+    ".password-store", "exodus.wallet",
+)
+_HIGH_DIR_PATHS = (  # multi-segment, checked as substrings
+    ".gnupg/private-keys-v1.d", ".gnupg/openpgp-revocs.d",
+    ".config/gcloud", ".electrum/wallets", ".ethereum/keystore",
+    ".bitcoin", ".litecoin", ".dogecoin",
+    "kwalletd", ".kde/share/apps/kwallet",  # KDE Wallet
+)
+
+_HIGH_EXTENSIONS = (
+    ".kdbx", ".kdb",
+    ".opvault", ".1pux", ".1pif", ".agilekeychain",
+    ".ppk",
+    ".keytab",
+    ".kwl",  # KDE Wallet
+)
+
+# Filenames safe to treat as HIGH confidence regardless of parent dir --
+# distinctive enough that directory context isn't needed.
+_HIGH_FILENAMES = (
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ed25519_sk",
+    "id_ecdsa_sk", "identity", "authorized_keys", "known_hosts",
+    "pubring.kbx", "pubring.gpg", "secring.gpg", "trustdb.gpg",
+    "trustedkeys.gpg", "trustedkeys.kbx",
+    "wallet.dat", "default_wallet",
+    "application_default_credentials.json", "credentials.db",
+    "access_tokens.db", "adc.json", "accesstokens.json",
+    "azureprofile.json", "msal_token_cache.bin",
+    "seed.seco", "info.seco", "storage.seco",
+    ".netrc", "_netrc", ".git-credentials", ".npmrc", ".pypirc",
+    ".vault-token", ".pgpass", ".my.cnf", ".s3cfg", ".boto", ".gpg-id",
+    "login data", "logins.json", "key4.db", "key3.db", "krb5.keytab",
+)
+
+# Filenames that are only HIGH confidence inside a specific parent dir
+# (e.g. "config" is sensitive under .kube/, meaningless anywhere else).
+# Each entry: (parent dir substring, filename).
+_HIGH_SCOPED_FILENAMES = (
+    (".aws", "credentials"),
+    (".aws", "config"),
+    (".kube", "config"),
+    (".ssh", "config"),
+    (".docker", "config.json"),
+)
+
+# Distinctive extensions -- unique enough to a single ecosystem that
+# they're safe as HIGH confidence without directory scoping.
+_HIGH_EXTENSIONS = (
+    ".kdbx", ".kdb",           # KeePass 2.x / 1.x
+    ".opvault", ".1pux", ".1pif", ".agilekeychain",  # 1Password
+    ".ppk",                    # PuTTY
+    ".keytab",                 # Kerberos
+)
+
+# ----------------------------------------------------------------------
+# MEDIUM confidence: conventions/prefixes that need directory context.
+# ----------------------------------------------------------------------
+
+# (prefix, required parent-dir substring or None if safe standalone)
+_MEDIUM_PREFIXES = (
+    ("utc--", "keystore"),      # Ethereum keystore V3
+    ("id_", ".ssh"),            # custom-named SSH keys
+    ("ssh_host_", "ssh"),       # host keys, usually /etc/ssh/
+)
+
+_MEDIUM_EXTENSIONS = (
+    (".keys", None),    # Monero -- paired with *.address.txt, but the
+                        # extension alone is distinctive enough
+    (".gpg", (".gnupg", ".password-store")),
+    (".asc", None), (".pgp", None),
+    (".pem", None), (".key", None), (".p12", None), (".pfx", None),
+    (".jks", None), (".keystore", None),
+)
+
+
+class Confidence(str, Enum):
+    NONE = "none"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+def _parts(path: str) -> list[str]:
+    return path.lower().replace("\\", "/").split("/")
+
+
+def classify(path: str) -> Confidence:
+    """Classify how confidently `path` looks like a secrets/credentials
+    store. See module docstring for what each tier means and how the
+    two call sites use different thresholds."""
+    lower = path.lower().replace("\\", "/")
+    parts = _parts(path)
+    basename = parts[-1] if parts else ""
+
+    # -- HIGH --
+    if any(part == d for part in parts for d in _HIGH_DIRS):
+        return Confidence.HIGH
+    if any(d in lower for d in _HIGH_DIR_PATHS):
+        return Confidence.HIGH
+    if basename in _HIGH_FILENAMES:
+        return Confidence.HIGH
+    for parent, filename in _HIGH_SCOPED_FILENAMES:
+        if basename == filename and parent in lower:
+            return Confidence.HIGH
+    if any(basename.endswith(ext) for ext in _HIGH_EXTENSIONS):
+        return Confidence.HIGH
+
+    # -- MEDIUM --
+    for prefix, needs_parent in _MEDIUM_PREFIXES:
+        if basename.startswith(prefix) and (needs_parent is None or needs_parent in lower):
+            return Confidence.MEDIUM
+    for ext, needs_parent in _MEDIUM_EXTENSIONS:
+        if basename.endswith(ext):
+            if needs_parent is None or (
+                isinstance(needs_parent, tuple) and any(p in lower for p in needs_parent)
+            ):
+                return Confidence.MEDIUM
+
+    return Confidence.NONE
+
+
+def is_likely_secrets_path(path: str) -> bool:
+    """HIGH or MEDIUM confidence. Used by suggest_fixes() (reports.py):
+    the wider threshold, since a missed match there means Ensign could
+    suggest a live setfacl command opening a real secrets directory."""
+    return classify(path) != Confidence.NONE
+
+
+def is_high_confidence_secrets_path(path: str) -> bool:
+    """HIGH confidence only. Used by process_file()'s permission-denial
+    reclassification (scanner.py): the narrower threshold, since a
+    false match there just hides a real permission error as expected."""
+    return classify(path) == Confidence.HIGH
+
+
+def matching_reason(path: str) -> str | None:
+    """Human-readable reason for a match, or None. For explaining a
+    flagged directory in suggest_fixes()'s output."""
+    conf = classify(path)
+    if conf == Confidence.NONE:
+        return None
+    basename = os.path.basename(path)
+    return f"{conf.value}-confidence match on {basename!r}"
