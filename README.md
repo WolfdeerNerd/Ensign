@@ -2,9 +2,11 @@
 
 Greetings!
 
-Ensign was originally a personal project. I liked clamscan, but I noticed it would keep breaking on certain files in my system. I decided to make a logic brain for it, Ensign. The idea was for Ensign to walk the entire system and log every file in an SQLAlchemy database. That database file is kept locally on **your** system. The db includes the id, filepath, filename, file hash, file size, modification time (mtime_ns), scan status, scan result, threat name, last time file was scanned, file creation time, and 'last updated at time' of each file logged in the db. 
+Ensign was originally a personal project. I liked clamscan, but I noticed it would keep breaking on certain files in my system — permission denials when clamd's own user couldn't read a path, files rejected outright for exceeding clamd's size limit, and a genuinely bizarre recursive mess with Steam's Proton Z: drive that kept re-scanning snapshots of snapshots of itself (more on that further down). On top of that, temp files have a way of vanishing between one moment and the next — the world of seemingly quantum temp files is terrifying.
 
-The idea was to be as paranoid as possible when designing this. That being said, it is completely possible that someone one else will notice something I missed and that in itself, is okay. 
+I decided to make a logic brain for this madness, Ensign. The idea was for Ensign to walk the entire system and log every file in an SQLAlchemy database. That database file is kept locally on **your** system. The db includes the id, filepath, filename, file hash, file size, modification time (mtime_ns), scan status, scan result, threat name, last time file was scanned, file creation time, and 'last updated at time' of each file logged in the db.
+
+The idea was to be as paranoid as possible when designing this. That being said, it is completely possible that someone one else will notice something I missed and that in itself, is okay.
 
 ## Disclaimer
 Parts of this repo were written with assistance of Claude. The architecture and design decisions were made by me. Feel free to scrutinize this code, I welcome any flaws that are found. This project is not perfect, the same way I am not. A wise man loves correction, a fool abhors it.
@@ -78,7 +80,7 @@ These run one job and exit — no full scan.
 
 | Command | What it does |
 |---|---|
-| `python3 main.py --purge-missing` | Remove DB records for files that no longer exist on disk. (The world of seemingly quantum temp files is terrifying.)|
+| `python3 main.py --purge-missing` | Remove DB records for files that no longer exist on disk |
 | `python3 main.py --rescan-errors` | Retry only files currently marked `ERROR` |
 | `python3 main.py --verify-pacman` | Cross-check installed files against pacman's own checksums, flag mismatches (Arch only, can be slow) |
 | `python3 main.py --suggest-fixes` | Print setfacl commands for current permission errors, optionally scoped to given targets |
@@ -129,9 +131,9 @@ ClamAV includes heuristic signatures (like `SVGDynamicFunction`) that can match 
 ### For Steam users,
 ### A note on Proton's 'Z:' drive
 
-When developing Ensign, there wasn't anything to stop the walk from wandering and rescanning symlinks since I didn't understand them. You can imagine my surprise when the db was gradually growing in size despite not installing any updates or playing any new games. After some digging I found the culprit. Steam's Z: drive in Proton. The Z: drive allows steam to see and interact with your file system on linux. Nothing wrong with that. What I had failed to understand was that it included the ENTIRE system. INCLUDING ALL THE SNAPSHOTS (system backups)! So as a result, the db was seemingly growing by hundreds of thousands of files as it identifies files by the file paths. Example: ~/Pictures/IMG001.jpg would also show up as ~/.steam/path/to/z:/home/user/Pictures/IMG0001.jpg. A duplicate entry despite being the same file. Now take into account all the usual games that are in a user's steam library and all of those individual files, the walk would seemingly run for DAYS before being finished logging all the symlinks as individual files.
+When developing Ensign, there wasn't anything to stop the walk from wandering and rescanning symlinks since I didn't understand them. You can imagine my surprise when the db was gradually growing in size despite not installing any updates or playing any new games. After some digging I found the culprit. Steam's Z: drive in Proton. The Z: drive allows steam to see and interact with your file system on linux. Nothing wrong with that. What I had failed to understand was that it included the ENTIRE system. INCLUDING ALL THE SNAPSHOTS (system backups)! So as a result, the db was seemingly growing by hundreds of thousands of files as it identifies files by the file paths. Example: ~/Pictures/IMG001.jpg would also show up as ~/.steam/path/to/z:/home/user/Pictures/IMG0001.jpg. A duplicate entry despite being the same file. Now take into account all the usual games that are in a user's steam library and all of those individual files, the walk would take literally days, going onto weeks, just to finish one sweep of the system.
 
-For a time it was quite literally logging backups of the backups of the backups as it followed every symlink. Regardless of how many layers deep it was.
+The reason it kept compounding wasn't just that Z: mirrored the whole filesystem — it's that Z: pointing back at `/` meant it also mirrored itself. A snapshot taken of the system would include a copy of the Z: drive, which pointed back at `/`, which contained the Steam compatdata folder, which contained more snapshots, each with their own Z: drive pointing back at `/` again. So the walk wasn't just duplicating files — it was recursively duplicating its own duplicates, with the depth compounding on every snapshot layer. For a time it was quite literally logging backups of the backups of the backups, regardless of how many layers deep it went.
 
 Hence why for this build, I've opted to set followlinks to False in the walk function itself:
 
