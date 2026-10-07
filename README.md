@@ -2,7 +2,7 @@
 
 Greetings!
 
-Ensign was originally a personal project. I liked clamscan, but I noticed it would keep breaking on certain files in my system — permission denials when clamd's own user couldn't read a path, files rejected outright for exceeding clamd's size limit, and a genuinely bizarre recursive mess with Steam's Proton Z: drive that kept re-scanning snapshots of snapshots of itself (more on that further down). On top of that, temp files have a way of vanishing between one moment and the next — the world of seemingly quantum temp files is terrifying.
+Ensign was originally a personal project. I liked clamscan, but I noticed it would keep breaking on certain files in my system — permission denials when clamd's own user couldn't read a path, files rejected outright for exceeding clamd's size limit, files that simply couldn't be hashed, and a genuinely bizarre recursive mess with Steam's Proton Z: drive that kept re-scanning snapshots of snapshots of itself (more on that further down). On top of that, temp files have a way of vanishing between one moment and the next — the world of seemingly quantum temp files is terrifying.
 
 I decided to make a logic brain for this madness, Ensign. The idea was for Ensign to walk the entire system and log every file in an SQLAlchemy database. That database file is kept locally on **your** system. The db includes the id, filepath, filename, file hash, file size, modification time (mtime_ns), scan status, scan result, threat name, last time file was scanned, file creation time, and 'last updated at time' of each file logged in the db.
 
@@ -47,14 +47,7 @@ sudo setfacl -R -d -m g:clamav:rX /path/to/hotspot
 - The first command allows the group `clamav` to read the files in the directory.
 - The second command makes it default for any new files in the same directory.
 
-## Usage
-
-For a full scan, you only need to run:
-```
-python3 path/to/main.py
-```
-
-This scans everything listed in your config's `scan_targets`, runs the infected/error/stale rescan passes, prints a summary and error breakdown, and sends a desktop notification when it's done (if one is available).
+**A note on updates:** Permissions can get reset when programs or games update, because an update may replace files or directories with fresh copies that don't carry the ACL you set. If permission errors come back after an update, run the two commands again on the affected folder (`python3 main.py --suggest-fixes` prints the right commands for the current errors).
 
 ## Threading & Worker Sizing
 
@@ -63,6 +56,29 @@ Ensign scans files concurrently using a thread pool, since the work per file (ha
 Worker count is either set explicitly (`max_workers` in config) or resolved automatically (`max_workers = 0`, the default): Ensign asks clamd for its own `MaxThreads` limit, subtracts a little headroom so the daemon stays responsive to other clients, and caps the result by your CPU count.
 
 If clamd can't be reached to ask, Ensign falls back to a safe default of 5 workers rather than guessing wildly. And no matter how constrained the machine — single core, a very low `MaxThreads` on clamd — the worker count can never drop below 1. **Ensign will always run, even on modest hardware;** it just scans one file at a time in that case rather than failing or requiring a separate no-threading mode.
+
+## Usage
+
+**First run: don't use `sudo`.** Run Ensign under your own username the first time. Ensign creates its config, database and log files on first run, and whoever runs it owns them. If the first run is as root, those files end up owned by root and your username can't use them afterwards. If that happens, delete the root-created files (the database in `~/.local/share/ensign/` and the config in `~/.config/ensign/`) and run Ensign once under your own username to recreate them.
+
+**First quick scan:** Before scanning everything, test your setup on one folder.
+
+1. Make sure ClamAV's daemon is running (Ensign tells you if it isn't):
+   ```
+   sudo systemctl start clamav-daemon
+   ```
+2. Run Ensign on a small tree, as your own username:
+   ```
+   python3 path/to/main.py ~/Downloads
+   ```
+3. If you see permission errors, see Permissions Setup above, then run it again.
+
+For a full scan, you only need to run:
+```
+python3 path/to/main.py
+```
+
+This scans everything listed in your config's `scan_targets`, runs the infected/error/stale rescan passes, prints a summary and error breakdown, and sends a desktop notification when it's done (if one is available).
 
 ### Targeting and behavior flags
 
@@ -133,7 +149,7 @@ ClamAV includes heuristic signatures (like `SVGDynamicFunction`) that can match 
 
 When developing Ensign, there wasn't anything to stop the walk from wandering and rescanning symlinks since I didn't understand them. You can imagine my surprise when the db was gradually growing in size despite not installing any updates or playing any new games. After some digging I found the culprit. Steam's Z: drive in Proton. The Z: drive allows steam to see and interact with your file system on linux. Nothing wrong with that. What I had failed to understand was that it included the ENTIRE system. INCLUDING ALL THE SNAPSHOTS (system backups)! So as a result, the db was seemingly growing by hundreds of thousands of files as it identifies files by the file paths. Example: ~/Pictures/IMG001.jpg would also show up as ~/.steam/path/to/z:/home/user/Pictures/IMG0001.jpg. A duplicate entry despite being the same file. Now take into account all the usual games that are in a user's steam library and all of those individual files, the walk would take literally days, going onto weeks, just to finish one sweep of the system.
 
-The reason it kept compounding wasn't just that Z: mirrored the whole filesystem — it's that Z: pointing back at `/` meant it also mirrored itself. A snapshot taken of the system would include a copy of the Z: drive, which pointed back at `/`, which contained the Steam compatdata folder, which contained more snapshots, each with their own Z: drive pointing back at `/` again. So the walk wasn't just duplicating files — it was recursively duplicating its own duplicates, with the depth compounding on every snapshot layer. For a time it was quite literally logging backups of the backups of the backups, regardless of how many layers deep it went.
+The reason it kept compounding wasn't just that Z: mirrored the whole filesystem — it's that Z: pointing back at `/` meant it also mirrored itself. A snapshot taken of the system would include a copy of the Z: drive, which pointed back at `/`, which contained the Steam compatdata folder, which contained more snapshots, each with their own Z: drive pointing back at `/` again. So the walk wasn't just duplicating files — it was recursively duplicating its own duplicates, with the depth compounding on every snapshot layer. For a time it was quite literally logging backups of the backups of the backups, REGARDLESS OF HOW MANY LAYERS DEEP IT WENT.
 
 Hence why for this build, I've opted to set followlinks to False in the walk function itself:
 
@@ -143,4 +159,4 @@ That way there's no endless cascade of walking a single directory. Symlinked dir
 
 
 ### Last Note
-This readme will be updated when needed. IE. FAQ questions that keep getting asked, or something needs further explanation. 
+This readme will be updated when needed. IE. FAQ questions that keep getting asked, or something needs further explanation.
